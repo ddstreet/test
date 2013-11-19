@@ -178,7 +178,7 @@ unsigned long calc_inc_mem_size()
 	return ((vals[0] * MEM_INC_PCT) / 100) * 1024;
 }
 
-unsigned long calc_counter(unsigned long counters[], int cpus)
+unsigned long inline calc_counter(unsigned long counters[], int cpus)
 {
 	unsigned long total = 0;
 	int i = 0;
@@ -187,7 +187,14 @@ unsigned long calc_counter(unsigned long counters[], int cpus)
 	return total;
 }
 
-double pct(unsigned long n, unsigned long d)
+unsigned long inline calc_time_diff_ms(struct timespec before, struct timespec after)
+{
+	time_t secs = after.tv_sec - before.tv_sec;
+	long nsecs = after.tv_nsec - before.tv_nsec;
+	return (secs * 1000) + (nsecs / 1000000);
+}
+
+double inline pct(unsigned long n, unsigned long d)
 {
 	return (double)(n * 100) / (double)d;
 }
@@ -206,6 +213,7 @@ void main(int argc, char *argv[])
 	unsigned long inc_mem_size = calc_inc_mem_size();
 	unsigned long bl_cpu_count, bl_random_count, bl_recent_count;
 	double used_mem;
+	struct timespec before, after;
 
 	printf("Getting baseline numbers\n");
 	fflush(NULL);
@@ -240,12 +248,13 @@ void main(int argc, char *argv[])
 	mem_random_pause = 0;
 	sleep(1);
 
-	printf("All mem in units of %% of total physical mem\n");
-	printf("Other units in %% of baseline measurement\n");
+	printf("All mem units %% of total physical mem\n");
+	printf("CPU and MEMORY units %% of baseline measurement\n");
+	printf("Allocation time units ms\n");
 	printf("\n");
-	printf("total|used|swap| CPU | MEMORY | MEMORY |\n");
-	printf(" mem | mem| mem|     | random | recent |\n");
-	printf("----------------------------------------\n");
+	printf("total|used|swap| CPU | MEMORY | MEMORY | alloc |\n");
+	printf(" mem | mem| mem|     | random | recent |  time |\n");
+	printf("------------------------------------------------\n");
 	fflush(NULL);
 
 	do {
@@ -253,19 +262,28 @@ void main(int argc, char *argv[])
 			printf("Too many pages allocated, exiting\n");
 			break;
 		}
+		if (clock_gettime(CLOCK_MONOTONIC_RAW, &before)) {
+			printf("Error getting timestamp\n");
+			break;
+		}
 	  page_count += alloc_pages(&pages[page_count], page_size, inc_mem_size);
+		if (clock_gettime(CLOCK_MONOTONIC_RAW, &after)) {
+			printf("Error getting timestamp\n");
+			break;
+		}
 		used_mem = calc_used_mem();
 		bzero(cpu_counters, cpus * sizeof(unsigned long));
 		mem_random_counter = 0;
 		mem_recent_counter = 0;
 		sleep(WORK_SLEEP_TIME);
-		printf(" %03.0f | %02.0f | %02.0f | %03.0f | %06.3f | %06.3f |\n",
+		printf(" %03.0f | %02.0f | %02.0f | %03.0f | %06.3f | %06.3f | %5ld |\n",
 					 used_mem,
 					 calc_used_mem_noswap(),
 					 calc_used_swap(),
 					 pct(calc_counter(cpu_counters, cpus), bl_cpu_count),
 					 pct(mem_random_counter, bl_random_count),
-					 pct(mem_recent_counter, bl_recent_count));
+					 pct(mem_recent_counter, bl_recent_count),
+					 calc_time_diff_ms(before, after));
 		fflush(NULL);
 	} while (used_mem < calc_max_mem(MAX_USED_SWAP_PCT));
 }
