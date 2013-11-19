@@ -199,6 +199,12 @@ double inline pct(unsigned long n, unsigned long d)
 	return (double)(n * 100) / (double)d;
 }
 
+double inline adj_counter_pct(unsigned long counter, unsigned long baseline, unsigned long ms) {
+	double adj = (double)ms / (double)(WORK_SLEEP_TIME * 1000);
+	double bl_new = (double)baseline * adj;
+	return (double)(counter * 100) / bl_new;
+}
+
 void main(int argc, char *argv[])
 {
 	int cpus = (int)sysconf(_SC_NPROCESSORS_CONF);
@@ -212,6 +218,7 @@ void main(int argc, char *argv[])
 	unsigned long init_mem_size = calc_init_mem_size();
 	unsigned long inc_mem_size = calc_inc_mem_size();
 	unsigned long bl_cpu_count, bl_random_count, bl_recent_count;
+	unsigned long alloc_cpu_count, alloc_random_count, alloc_recent_count, alloc_ms;
 	double used_mem;
 	struct timespec before, after;
 
@@ -251,10 +258,13 @@ void main(int argc, char *argv[])
 	printf("All mem units %% of total physical mem\n");
 	printf("CPU and MEMORY units %% of baseline measurement\n");
 	printf("Allocation time units ms\n");
+	printf("Alloc period is when new memory is being allocated\n");
+	printf("Measure period is %d sleep delay to measure counters\n", WORK_SLEEP_TIME);
 	printf("\n");
-	printf("total|used|swap| CPU | MEMORY | MEMORY | alloc |\n");
-	printf(" mem | mem| mem|     | random | recent |  time |\n");
-	printf("------------------------------------------------\n");
+	printf("               |    Measure Period       |        Alloc Period             |\n");
+	printf("total|used|swap| CPU |  MEMORY |  MEMORY | alloc | CPU |  MEMORY |  MEMORY |\n");
+	printf(" mem | mem| mem|     |  random |  recent |  time |     |  random |  recent |\n");
+	printf("----------------------------------------------------------------------------\n");
 	fflush(NULL);
 
 	do {
@@ -262,6 +272,10 @@ void main(int argc, char *argv[])
 			printf("Too many pages allocated, exiting\n");
 			break;
 		}
+
+		bzero(cpu_counters, cpus * sizeof(unsigned long));
+		mem_random_counter = 0;
+		mem_recent_counter = 0;
 		if (clock_gettime(CLOCK_MONOTONIC_RAW, &before)) {
 			printf("Error getting timestamp\n");
 			break;
@@ -271,19 +285,27 @@ void main(int argc, char *argv[])
 			printf("Error getting timestamp\n");
 			break;
 		}
+		alloc_cpu_count = calc_counter(cpu_counters, cpus);
+		alloc_random_count = mem_random_counter;
+		alloc_recent_count = mem_recent_counter;
+		alloc_ms = calc_time_diff_ms(before, after);
+
 		used_mem = calc_used_mem();
 		bzero(cpu_counters, cpus * sizeof(unsigned long));
 		mem_random_counter = 0;
 		mem_recent_counter = 0;
 		sleep(WORK_SLEEP_TIME);
-		printf(" %03.0f | %02.0f | %02.0f | %03.0f | %06.3f | %06.3f | %5ld |\n",
+		printf(" %3.0f | %2.0f | %2.0f | %3.0f | %7.3f | %7.3f | %5ld | %3.0f | %7.3f | %7.3f |\n",
 					 used_mem,
 					 calc_used_mem_noswap(),
 					 calc_used_swap(),
 					 pct(calc_counter(cpu_counters, cpus), bl_cpu_count),
 					 pct(mem_random_counter, bl_random_count),
 					 pct(mem_recent_counter, bl_recent_count),
-					 calc_time_diff_ms(before, after));
+					 alloc_ms,
+					 adj_counter_pct(alloc_cpu_count, bl_cpu_count, alloc_ms),
+					 adj_counter_pct(alloc_random_count, bl_random_count, alloc_ms),
+					 adj_counter_pct(alloc_recent_count, bl_recent_count, alloc_ms));
 		fflush(NULL);
 	} while (used_mem < calc_max_mem(MAX_USED_SWAP_PCT));
 }
