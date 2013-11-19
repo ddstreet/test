@@ -8,8 +8,12 @@
 
 #define WORK_SLEEP_TIME 3
 #define MAX_USED_SWAP_PCT 30
+#define RECENT_PAGES 1024
+#define MEM_INC_PCT 1
 
-static int cpu_workers_pause = 0;
+static int cpu_workers_pause = 0, mem_random_pause = 0, mem_recent_pause = 0;
+static void **pages = NULL;
+static unsigned long page_count = 0;
 
 void *cpu_worker(void *arg)
 {
@@ -25,45 +29,38 @@ void *cpu_worker(void *arg)
 	}
 }
 
-struct random_page_stats {
-	long min;
-	long max;
-	long avg;
-	int count;
-	int err;
-	int reset;
-	unsigned long *page_count;
-	void **pages;
-};
-
 void *random_page_worker(void *arg)
 {
-	struct random_page_stats *stats = (struct random_page_stats*)arg;
+	unsigned long *counter = (unsigned long *)arg;
 	int r, v;
-	struct timespec before, after;
-	long sec, nsec;
 	while (1) {
-		r = rand() % *stats->page_count;
-		v = rand() % 0xff;
-		if (clock_gettime(CLOCK_MONOTONIC_RAW, &before)) {
-			stats->err++;
-			continue;
+		if (mem_random_pause)
+			sleep(1);
+		else {
+			r = rand() % page_count;
+			v = (*counter) % 0xff;
+			memset(pages[r], v, 1);
+			(*counter)++;
 		}
-		memset(stats->pages[r], v, 1);
-		if (clock_gettime(CLOCK_MONOTONIC_RAW, &after)) {
-			stats->err++;
-			continue;
+	}
+}
+
+void *recent_page_worker(void *arg)
+{
+	unsigned long *counter = (unsigned long *)arg;
+	int r, v;
+	while (1) {
+		if (mem_recent_pause)
+			sleep(1);
+		else {
+			r = rand() % RECENT_PAGES;
+			r = page_count - 1 - r;
+			if (r < 0)
+				r = 0;
+			v = (*counter) % 0xff;
+			memset(pages[r], v, 1);
+			(*counter)++;
 		}
-		sec = after.tv_sec - before.tv_sec;
-		nsec = (sec * 1000000000) + after.tv_nsec - before.tv_nsec;
-		if (stats->reset)
-			stats->min = stats->max = stats->avg = stats->count = stats->err = stats->reset = 0;
-		if (nsec < stats->min || !stats->min)
-			stats->min = nsec;
-		if (nsec > stats->max)
-			stats->max = nsec;
-		stats->avg = ((stats->avg * stats->count) + nsec) / (stats->count + 1);
-		stats->count++;
 	}
 }
 
@@ -123,6 +120,16 @@ double calc_used_mem()
 	return ((double)(used * 100) / (double)vals[0]);
 }
 
+double calc_used_mem_noswap()
+{
+	char *keys[] = { "MemTotal", "AnonPages", NULL };
+	unsigned long vals[2] = { 0 };
+
+	get_meminfo_vals(keys, vals);
+
+	return ((double)(vals[1] * 100) / (double)vals[0]);
+}
+
 double calc_used_swap()
 {
 	char *keys[] = { "MemTotal", "SwapTotal", "SwapFree", NULL };
@@ -168,7 +175,7 @@ unsigned long calc_inc_mem_size()
 
 	get_meminfo_vals(keys, vals);
 
-	return ((vals[0] * 2) / 100) * 1024;
+	return ((vals[0] * MEM_INC_PCT) / 100) * 1024;
 }
 
 unsigned long calc_counter(unsigned long counters[], int cpus)
@@ -191,62 +198,74 @@ void main(int argc, char *argv[])
 	size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
 	unsigned long phys_pages = sysconf(_SC_PHYS_PAGES);
 	unsigned long max_pages = (phys_pages * 2); /* 2x is arbitrary */
-	void **pages = calloc(max_pages, sizeof(void*));
-	unsigned long counters[cpus];
-	unsigned long current_pages = 0;
-	double used_mem;
+	pages = calloc(max_pages, sizeof(void*));
+	unsigned long cpu_counters[cpus];
+	unsigned long mem_random_counter, mem_recent_counter;
+	pthread_t mem_random_worker, mem_recent_worker;
 	unsigned long init_mem_size = calc_init_mem_size();
 	unsigned long inc_mem_size = calc_inc_mem_size();
-	pthread_t worker;
-	struct random_page_stats stats;
-	unsigned long bl_count, bl_min, bl_avg, bl_max, bl_page_count;
-	int bl_set = 0;
-
-	memset(&stats, 0, sizeof(struct random_page_stats));
-	stats.page_count = &current_pages;
-	stats.pages = pages;
+	unsigned long bl_cpu_count, bl_random_count, bl_recent_count;
+	double used_mem;
 
 	printf("Getting baseline numbers\n");
 	fflush(NULL);
-	start_cpu_workers(cpus, counters);
-	bzero(counters, cpus * sizeof(unsigned long));
+	start_cpu_workers(cpus, cpu_counters);
+	bzero(cpu_counters, cpus * sizeof(unsigned long));
 	sleep(WORK_SLEEP_TIME);
-	bl_count = calc_counter(counters, cpus);
+	bl_cpu_count = calc_counter(cpu_counters, cpus);
 
 	cpu_workers_pause = 1;
 
-	current_pages += alloc_pages(&pages[current_pages], page_size, page_size * 1024);
-	pthread_create(&worker, NULL, &random_page_worker, &stats);
-	stats.reset = 1;
-	sleep(WORK_SLEEP_TIME);
-	bl_avg = stats.avg;
-	bl_page_count = stats.count;
+	page_count += alloc_pages(&pages[page_count], page_size, page_size * RECENT_PAGES);
 
-	printf("Baseline CPU count %ld MEM avg %ld count %ld\n", bl_count, bl_avg, bl_page_count);
+	pthread_create(&mem_random_worker, NULL, &random_page_worker, &mem_random_counter);
+	mem_random_counter = 0;
+	sleep(WORK_SLEEP_TIME);
+	bl_random_count = mem_random_counter;
+
+	mem_random_pause = 1;
+
+	pthread_create(&mem_recent_worker, NULL, &recent_page_worker, &mem_recent_counter);
+	mem_recent_counter = 0;
+	sleep(WORK_SLEEP_TIME);
+	bl_recent_count = mem_recent_counter;
+
+	printf("Baseline CPU %ld MEM random %ld recent %ld\n", bl_cpu_count, bl_random_count, bl_recent_count);
 
 	printf("Allocating %ldm of initial memory\n", init_mem_size / (1024 * 1024));
 	fflush(NULL);
-	current_pages += alloc_pages(&pages[current_pages], page_size, init_mem_size);
+	page_count += alloc_pages(&pages[page_count], page_size, init_mem_size);
 
 	cpu_workers_pause = 0;
+	mem_random_pause = 0;
 	sleep(1);
 
+	printf("All mem in units of %% of total physical mem\n");
+	printf("Other units in %% of baseline measurement\n");
+	printf("\n");
+	printf("total|used|swap| CPU | MEMORY | MEMORY |\n");
+	printf(" mem | mem| mem|     | random | recent |\n");
+	printf("----------------------------------------\n");
+	fflush(NULL);
+
 	do {
-		if (current_pages + (inc_mem_size/page_size) > max_pages) {
+		if (page_count + (inc_mem_size/page_size) > max_pages) {
 			printf("Too many pages allocated, exiting\n");
 			break;
 		}
-		current_pages += alloc_pages(&pages[current_pages], page_size, inc_mem_size);
+	  page_count += alloc_pages(&pages[page_count], page_size, inc_mem_size);
 		used_mem = calc_used_mem();
-		bzero(counters, cpus * sizeof(unsigned long));
-		stats.reset = 1;
+		bzero(cpu_counters, cpus * sizeof(unsigned long));
+		mem_random_counter = 0;
+		mem_recent_counter = 0;
 		sleep(WORK_SLEEP_TIME);
-		printf("%03.0f%% mem, %02.0f%% swap, count %02.0f%%, (%06.0f%% avg, count %06.3f%%, err %d)\n",
-					 used_mem, calc_used_swap(),
-					 pct(calc_counter(counters, cpus), bl_count),
-					 pct(stats.avg, bl_avg),
-					 pct(stats.count, bl_page_count),
-					 stats.err);
+		printf(" %03.0f | %02.0f | %02.0f | %03.0f | %06.3f | %06.3f |\n",
+					 used_mem,
+					 calc_used_mem_noswap(),
+					 calc_used_swap(),
+					 pct(calc_counter(cpu_counters, cpus), bl_cpu_count),
+					 pct(mem_random_counter, bl_random_count),
+					 pct(mem_recent_counter, bl_recent_count));
 		fflush(NULL);
 	} while (used_mem < calc_max_mem(MAX_USED_SWAP_PCT));
 }
