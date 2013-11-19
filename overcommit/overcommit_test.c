@@ -7,7 +7,7 @@
 #include <pthread.h>
 
 #define WORK_SLEEP_TIME 3
-#define MAX_USED_SWAP_PCT 30
+#define MAX_USED_MEM 1.5
 #define RECENT_PAGES 1024
 #define MEM_INC_PCT 1
 
@@ -139,18 +139,6 @@ double calc_used_swap()
 	get_meminfo_vals(keys, vals);
 
 	return (double)((vals[1] - vals[2]) * 100) / (double)vals[0];
-}
-
-double calc_max_mem(int pct_swap)
-{
-	char *keys[] = { "MemTotal", "SwapTotal", NULL };
-	unsigned long vals[2] = { 0 };
-	unsigned long max_swap;
-
-	get_meminfo_vals(keys, vals);
-
-	max_swap = (vals[1] * pct_swap) / 100;
-	return ((double)((vals[0] + max_swap) * 100) / (double)vals[0]);
 }
 
 unsigned long calc_init_mem_size()
@@ -307,7 +295,7 @@ void main(int argc, char *argv[])
 					 adj_counter_pct(alloc_random_count, bl_random_count, alloc_ms),
 					 adj_counter_pct(alloc_recent_count, bl_recent_count, alloc_ms));
 		fflush(NULL);
-	} while (used_mem < calc_max_mem(MAX_USED_SWAP_PCT));
+	} while (used_mem < MAX_USED_MEM);
 }
 
 
