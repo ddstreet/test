@@ -7,7 +7,7 @@
 #include <pthread.h>
 
 #define WORK_SLEEP_TIME 3
-#define MAX_USED_MEM 1.5
+#define MAX_USED_MEM 150
 #define RECENT_PAGES 1024
 #define MEM_INC_PCT 1
 
