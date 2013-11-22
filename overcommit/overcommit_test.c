@@ -18,6 +18,8 @@ static int cpu_workers_pause = 0, mem_random_pause = 0, mem_recent_pause = 0;
 static void **pages = NULL;
 static unsigned long page_count = 0;
 static long frontswap_loads = 0;
+static unsigned long last_user = 0, last_system = 0, last_idle = 0, last_iowait = 0, last_other = 0;
+static unsigned long stat_user = 0, stat_system = 0, stat_idle = 0, stat_iowait = 0, stat_other = 0;
 
 void *cpu_worker(void *arg)
 {
@@ -104,6 +106,43 @@ long get_frontswap_loads()
 	}
 	fclose(fp);
 	return frontswap_loads - last_loads;
+}
+
+void get_stat_data()
+{
+	FILE *fp = fopen("/proc/stat", "r");
+	char *line = NULL, *tmp;
+	size_t len = 0;
+	ssize_t read;
+	unsigned long tmp_user, tmp_system, tmp_idle, tmp_iowait;
+
+	while ((read = getline(&line, &len, fp)) >= 0) {
+		if (!strncmp("cpu ", line, 4))
+			break;
+		free(line);
+		line = NULL;
+		len = 0;
+	}
+	if (read <= 0)
+		return;
+	tmp = line + 3;
+	tmp_user = strtol(tmp, &tmp, 10);
+	tmp_user += strtol(tmp, &tmp, 10);
+	tmp_system = strtol(tmp, &tmp, 10);
+	tmp_idle = strtol(tmp, &tmp, 10);
+	tmp_iowait = strtol(tmp, &tmp, 10);
+	tmp_system += strtol(tmp, &tmp, 10);
+	tmp_system += strtol(tmp, &tmp, 10);
+	free(line);
+	fclose(fp);
+	stat_user = tmp_user - last_user;
+	stat_system = tmp_system - last_system;
+	stat_idle = tmp_idle - last_idle;
+	stat_iowait = tmp_iowait - last_iowait;
+	last_user = tmp_user;
+	last_system = tmp_system;
+	last_idle = tmp_idle;
+	last_iowait = tmp_iowait;
 }
 
 void get_meminfo_vals(char *keys[], unsigned long vals[])
@@ -272,11 +311,14 @@ void main(int argc, char *argv[])
 	printf("Alloc period is when new memory is being allocated\n");
 	printf("Measure period is %d sleep delay to measure counters\n", WORK_SLEEP_TIME);
 	printf("\n");
-	printf("               |          Measure Period           |              Alloc Period                 |\n");
-	printf("total|used|swap| CPU |  MEMORY |  MEMORY |  zswap  | alloc | CPU |  MEMORY |  MEMORY |  zswap  |\n");
-	printf(" mem | mem| mem|     |  random |  recent |  loads  |  time |     |  random |  recent |  loads  |\n");
-	printf("------------------------------------------------------------------------------------------------\n");
+	printf("               |                     Measure Period                        |              Alloc Period                 |\n");
+	printf("total|used|swap| CPU |  MEMORY |  MEMORY |  zswap  | user| sys | idle| iowt| alloc | CPU |  MEMORY |  MEMORY |  zswap  |\n");
+	printf(" mem | mem| mem|     |  random |  recent |  loads  |     |     |     |     |  time |     |  random |  recent |  loads  |\n");
+	printf("------------------------------------------------------------------------------------------------------------------------\n");
 	fflush(NULL);
+
+	cpu_workers_pause = 1;
+	mem_recent_pause = 1;
 
 	do {
 		if (page_count + (inc_mem_size/page_size) > max_pages) {
@@ -292,7 +334,7 @@ void main(int argc, char *argv[])
 			printf("Error getting timestamp\n");
 			break;
 		}
-	  page_count += alloc_pages(&pages[page_count], page_size, inc_mem_size);
+		page_count += alloc_pages(&pages[page_count], page_size, inc_mem_size);
 		if (clock_gettime(CLOCK_MONOTONIC_RAW, &after)) {
 			printf("Error getting timestamp\n");
 			break;
@@ -307,8 +349,10 @@ void main(int argc, char *argv[])
 		bzero(cpu_counters, cpus * sizeof(unsigned long));
 		mem_random_counter = 0;
 		mem_recent_counter = 0;
+		get_stat_data();
 		sleep(WORK_SLEEP_TIME);
-		printf(" %3.0f | %2.0f | %2.0f | %3.0f | %7.3f | %7.3f | %7ld | %5ld | %3.0f | %7.3f | %7.3f | %7ld |\n",
+		get_stat_data();
+		printf(" %3.0f | %2.0f | %2.0f | %3.0f | %7.3f | %7.3f | %7ld |%4ld |%4ld |%4ld |%4ld | %5ld | %3.0f | %7.3f | %7.3f | %7ld |\n",
 					 used_mem,
 					 calc_used_mem_noswap(),
 					 calc_used_swap(),
@@ -316,6 +360,10 @@ void main(int argc, char *argv[])
 					 pct(mem_random_counter, bl_random_count),
 					 pct(mem_recent_counter, bl_recent_count),
 					 get_frontswap_loads(),
+					 stat_user,
+					 stat_system,
+					 stat_idle,
+					 stat_iowait,
 					 alloc_ms,
 					 adj_counter_pct(alloc_cpu_count, bl_cpu_count, alloc_ms),
 					 adj_counter_pct(alloc_random_count, bl_random_count, alloc_ms),
