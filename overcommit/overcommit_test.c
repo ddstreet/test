@@ -6,6 +6,8 @@
 #include <string.h>
 #include <pthread.h>
 
+#define VERSION 1
+
 #define WORK_SLEEP_TIME 5
 #define MAX_USED_MEM 120
 #define RECENT_PAGES 4096
@@ -228,6 +230,8 @@ void main(int argc, char *argv[])
 	long alloc_loads;
 	double used_mem;
 	struct timespec before, after;
+
+	printf("Version %d\n",VERSION);
 
 	printf("Getting baseline numbers\n");
 	fflush(NULL);
