@@ -15,6 +15,7 @@ static int cpu_workers_exit = 0, mem_random_exit = 0, mem_recent_exit = 0;
 static int cpu_workers_pause = 0, mem_random_pause = 0, mem_recent_pause = 0;
 static void **pages = NULL;
 static unsigned long page_count = 0;
+static long frontswap_loads = 0;
 
 void *cpu_worker(void *arg)
 {
@@ -85,6 +86,22 @@ unsigned long alloc_pages(void *pages[], size_t page_size, unsigned long n)
 			break; /* ENOMEM */
 	}
 	return p;
+}
+
+long get_frontswap_loads()
+{
+	FILE *fp = fopen("/sys/kernel/debug/frontswap/loads", "r");
+	char *line = NULL;
+	size_t len = 0;
+	ssize_t read;
+	long last_loads = frontswap_loads;
+
+	if ((read = getline(&line, &len, fp)) >= 0) {
+		frontswap_loads = strtol(line, NULL, 10);
+		free(line);
+	}
+	fclose(fp);
+	return frontswap_loads - last_loads;
 }
 
 void get_meminfo_vals(char *keys[], unsigned long vals[])
@@ -208,6 +225,7 @@ void main(int argc, char *argv[])
 	unsigned long inc_mem_size = calc_inc_mem_size();
 	unsigned long bl_cpu_count, bl_random_count, bl_recent_count;
 	unsigned long alloc_cpu_count, alloc_random_count, alloc_recent_count, alloc_ms;
+	long alloc_loads;
 	double used_mem;
 	struct timespec before, after;
 
@@ -250,10 +268,10 @@ void main(int argc, char *argv[])
 	printf("Alloc period is when new memory is being allocated\n");
 	printf("Measure period is %d sleep delay to measure counters\n", WORK_SLEEP_TIME);
 	printf("\n");
-	printf("               |    Measure Period       |        Alloc Period             |\n");
-	printf("total|used|swap| CPU |  MEMORY |  MEMORY | alloc | CPU |  MEMORY |  MEMORY |\n");
-	printf(" mem | mem| mem|     |  random |  recent |  time |     |  random |  recent |\n");
-	printf("----------------------------------------------------------------------------\n");
+	printf("               |          Measure Period           |              Alloc Period                 |\n");
+	printf("total|used|swap| CPU |  MEMORY |  MEMORY |  zswap  | alloc | CPU |  MEMORY |  MEMORY |  zswap  |\n");
+	printf(" mem | mem| mem|     |  random |  recent |  loads  |  time |     |  random |  recent |  loads  |\n");
+	printf("------------------------------------------------------------------------------------------------\n");
 	fflush(NULL);
 
 	do {
@@ -265,6 +283,7 @@ void main(int argc, char *argv[])
 		bzero(cpu_counters, cpus * sizeof(unsigned long));
 		mem_random_counter = 0;
 		mem_recent_counter = 0;
+		get_frontswap_loads();
 		if (clock_gettime(CLOCK_MONOTONIC_RAW, &before)) {
 			printf("Error getting timestamp\n");
 			break;
@@ -278,35 +297,31 @@ void main(int argc, char *argv[])
 		alloc_random_count = mem_random_counter;
 		alloc_recent_count = mem_recent_counter;
 		alloc_ms = calc_time_diff_ms(before, after);
+		alloc_loads = get_frontswap_loads();
 
 		used_mem = calc_used_mem();
 		bzero(cpu_counters, cpus * sizeof(unsigned long));
 		mem_random_counter = 0;
 		mem_recent_counter = 0;
 		sleep(WORK_SLEEP_TIME);
-		printf(" %3.0f | %2.0f | %2.0f | %3.0f | %7.3f | %7.3f | %5ld | %3.0f | %7.3f | %7.3f |\n",
+		printf(" %3.0f | %2.0f | %2.0f | %3.0f | %7.3f | %7.3f | %7ld | %5ld | %3.0f | %7.3f | %7.3f | %7ld |\n",
 					 used_mem,
 					 calc_used_mem_noswap(),
 					 calc_used_swap(),
 					 pct(calc_counter(cpu_counters, cpus), bl_cpu_count),
 					 pct(mem_random_counter, bl_random_count),
 					 pct(mem_recent_counter, bl_recent_count),
+					 get_frontswap_loads(),
 					 alloc_ms,
 					 adj_counter_pct(alloc_cpu_count, bl_cpu_count, alloc_ms),
 					 adj_counter_pct(alloc_random_count, bl_random_count, alloc_ms),
-					 adj_counter_pct(alloc_recent_count, bl_recent_count, alloc_ms));
+					 adj_counter_pct(alloc_recent_count, bl_recent_count, alloc_ms),
+					 alloc_loads);
 		fflush(NULL);
 	} while (used_mem < MAX_USED_MEM);
 
 	cpu_workers_exit = mem_random_exit = mem_recent_exit = 1;
 
-	fprintf(stderr, "\n");
-	while (page_count--) {
-		fprintf(stderr, "Freeing page %ld                \r",page_count);
-		free(pages[page_count]);
-	}
-	free(pages);
-	fprintf(stderr, "\nDone.\n");
 }
 
 
