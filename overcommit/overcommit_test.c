@@ -6,11 +6,12 @@
 #include <string.h>
 #include <pthread.h>
 
-#define WORK_SLEEP_TIME 3
-#define MAX_USED_MEM 150
-#define RECENT_PAGES 1024
+#define WORK_SLEEP_TIME 5
+#define MAX_USED_MEM 120
+#define RECENT_PAGES 4096
 #define MEM_INC_PCT 1
 
+static int cpu_workers_exit = 0, mem_random_exit = 0, mem_recent_exit = 0;
 static int cpu_workers_pause = 0, mem_random_pause = 0, mem_recent_pause = 0;
 static void **pages = NULL;
 static unsigned long page_count = 0;
@@ -19,7 +20,7 @@ void *cpu_worker(void *arg)
 {
 	unsigned long *counter = (unsigned long*)arg;
 	int outer_counter = 1024;
-	while (1) {
+	while (!cpu_workers_exit) {
 		if (cpu_workers_pause)
 			sleep(1);
 		else if (!--outer_counter) {
@@ -33,7 +34,7 @@ void *random_page_worker(void *arg)
 {
 	unsigned long *counter = (unsigned long *)arg;
 	int r, v;
-	while (1) {
+	while (!mem_random_exit) {
 		if (mem_random_pause)
 			sleep(1);
 		else {
@@ -49,7 +50,7 @@ void *recent_page_worker(void *arg)
 {
 	unsigned long *counter = (unsigned long *)arg;
 	int r, v;
-	while (1) {
+	while (!mem_recent_exit) {
 		if (mem_recent_pause)
 			sleep(1);
 		else {
@@ -296,6 +297,16 @@ void main(int argc, char *argv[])
 					 adj_counter_pct(alloc_recent_count, bl_recent_count, alloc_ms));
 		fflush(NULL);
 	} while (used_mem < MAX_USED_MEM);
+
+	cpu_workers_exit = mem_random_exit = mem_recent_exit = 1;
+
+	fprintf(stderr, "\n");
+	while (page_count--) {
+		fprintf(stderr, "Freeing page %ld                \r",page_count);
+		free(pages[page_count]);
+	}
+	free(pages);
+	fprintf(stderr, "\nDone.\n");
 }
 
 
