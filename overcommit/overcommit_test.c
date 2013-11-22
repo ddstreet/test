@@ -13,6 +13,7 @@
 #define RECENT_PAGES 4096
 #define MEM_INC_PCT 1
 
+static int no_cpu = 0, no_random = 0, no_recent = 0;
 static int cpu_workers_exit = 0, mem_random_exit = 0, mem_recent_exit = 0;
 static int cpu_workers_pause = 0, mem_random_pause = 0, mem_recent_pause = 0;
 static void **pages = NULL;
@@ -264,36 +265,53 @@ void main(int argc, char *argv[])
 	pthread_t mem_random_worker, mem_recent_worker;
 	unsigned long init_mem_size = calc_init_mem_size();
 	unsigned long inc_mem_size = calc_inc_mem_size();
-	unsigned long bl_cpu_count, bl_random_count, bl_recent_count;
+	unsigned long bl_cpu_count = 0, bl_random_count = 0, bl_recent_count = 0;
 	unsigned long alloc_cpu_count, alloc_random_count, alloc_recent_count, alloc_ms;
 	long alloc_loads;
 	double used_mem;
 	struct timespec before, after;
+	int a;
+
+	for (a=1; a<argc; a++) {
+		if (!strcmp("-nocpu", argv[a]))
+			no_cpu = 1;
+		else if (!strcmp("-norandom", argv[a]))
+			no_random = 1;
+		else if (!strcmp("-norecent", argv[a]))
+			no_recent = 1;
+	}
 
 	printf("Version %d\n",VERSION);
 
 	printf("Getting baseline numbers\n");
 	fflush(NULL);
-	start_cpu_workers(cpus, cpu_counters);
-	bzero(cpu_counters, cpus * sizeof(unsigned long));
-	sleep(WORK_SLEEP_TIME);
-	bl_cpu_count = calc_counter(cpu_counters, cpus);
 
-	cpu_workers_pause = 1;
+	if (!no_cpu) {
+		start_cpu_workers(cpus, cpu_counters);
+		bzero(cpu_counters, cpus * sizeof(unsigned long));
+		sleep(WORK_SLEEP_TIME);
+		bl_cpu_count = calc_counter(cpu_counters, cpus);
+
+		cpu_workers_pause = 1;
+	}
 
 	page_count += alloc_pages(&pages[page_count], page_size, page_size * RECENT_PAGES);
 
-	pthread_create(&mem_random_worker, NULL, &random_page_worker, &mem_random_counter);
-	mem_random_counter = 0;
-	sleep(WORK_SLEEP_TIME);
-	bl_random_count = mem_random_counter;
+	if (!no_random) {
+		pthread_create(&mem_random_worker, NULL, &random_page_worker, &mem_random_counter);
+		mem_random_counter = 0;
+		sleep(WORK_SLEEP_TIME);
+		bl_random_count = mem_random_counter;
 
-	mem_random_pause = 1;
+		mem_random_pause = 1;
+	}
 
-	pthread_create(&mem_recent_worker, NULL, &recent_page_worker, &mem_recent_counter);
-	mem_recent_counter = 0;
-	sleep(WORK_SLEEP_TIME);
-	bl_recent_count = mem_recent_counter;
+	if (!no_recent) {
+		pthread_create(&mem_recent_worker, NULL, &recent_page_worker, &mem_recent_counter);
+		mem_recent_counter = 0;
+		sleep(WORK_SLEEP_TIME);
+		bl_recent_count = mem_recent_counter;
+	}
 
 	printf("Baseline CPU %ld MEM random %ld recent %ld\n", bl_cpu_count, bl_random_count, bl_recent_count);
 
@@ -309,16 +327,13 @@ void main(int argc, char *argv[])
 	printf("CPU and MEMORY units %% of baseline measurement\n");
 	printf("Allocation time units ms\n");
 	printf("Alloc period is when new memory is being allocated\n");
-	printf("Measure period is %d sleep delay to measure counters\n", WORK_SLEEP_TIME);
+	printf("Measure period is %d secs sleep delay to measure counters\n", WORK_SLEEP_TIME);
 	printf("\n");
 	printf("               |                     Measure Period                        |              Alloc Period                 |\n");
 	printf("total|used|swap| CPU |  MEMORY |  MEMORY |  zswap  | user| sys | idle| iowt| alloc | CPU |  MEMORY |  MEMORY |  zswap  |\n");
 	printf(" mem | mem| mem|     |  random |  recent |  loads  |     |     |     |     |  time |     |  random |  recent |  loads  |\n");
 	printf("------------------------------------------------------------------------------------------------------------------------\n");
 	fflush(NULL);
-
-	cpu_workers_pause = 1;
-	mem_recent_pause = 1;
 
 	do {
 		if (page_count + (inc_mem_size/page_size) > max_pages) {
