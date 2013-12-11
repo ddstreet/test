@@ -352,9 +352,9 @@ void main(int argc, char *argv[])
 		else if (!strcmp("-fillpages", argv[a]))
 			random_fill_pages = 2;
 		else if (!strcmp("-worktime", argv[a]))
-			work_sleep_time = atoi(argv[a++]);
+			work_sleep_time = atoi(argv[++a]);
 		else if (!strcmp("-recentpages", argv[a]))
-			recent_pages = atoi(argv[a++]);
+			recent_pages = atoi(argv[++a]);
 		else if (!strcmp("-help", argv[a]) || !strcmp("-h", argv[a])) {
 			show_help(argv);
 			return;
